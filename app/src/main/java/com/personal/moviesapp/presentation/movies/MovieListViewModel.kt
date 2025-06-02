@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.personal.moviesapp.data.model.MovieResponseItem
 import com.personal.moviesapp.domain.model.Result
 import com.personal.moviesapp.domain.usecase.GetPopularMoviesUseCase
+import com.personal.moviesapp.domain.usecase.GetSearchSuggestionsUseCase
 import com.personal.moviesapp.domain.usecase.SearchMoviesUseCase
 import com.personal.moviesapp.presentation.movies.MoviesScreenSideEffect.NavigateToDetails
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -22,7 +23,8 @@ import javax.inject.Inject
 @HiltViewModel
 class MovieListViewModel @Inject constructor(
     private val getPopularMoviesUseCase: GetPopularMoviesUseCase,
-    private val searchMoviesUseCase: SearchMoviesUseCase
+    private val searchMoviesUseCase: SearchMoviesUseCase,
+    private val getSearchSuggestionsUseCase: GetSearchSuggestionsUseCase
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<MoviesScreenUiState>(MoviesScreenUiState.Loading)
@@ -34,10 +36,14 @@ class MovieListViewModel @Inject constructor(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
+    private val _searchSuggestions = MutableStateFlow<List<String>>(emptyList())
+    val searchSuggestions: StateFlow<List<String>> = _searchSuggestions.asStateFlow()
+
     private var currentPage = 1
     private var isLoading = false
     private var hasNextPage = true
     private var searchJob: Job? = null
+    private var suggestionsJob: Job? = null
 
     init {
         loadMovies()
@@ -50,6 +56,24 @@ class MovieListViewModel @Inject constructor(
             is MovieListEvent.OnMovieClick -> handleMovieClick(event.movie)
             is MovieListEvent.OnSearchQueryChange -> {
                 _searchQuery.value = event.query
+                updateSearchSuggestions(event.query)
+
+            }
+            is MovieListEvent.OnSuggestionClick -> {
+                _searchQuery.value = event.suggestion
+                searchMovies(event.suggestion)
+            }
+            is MovieListEvent.OnSearchFocusChange -> {
+                if (event.isFocused && _searchQuery.value.length >= 2) {
+                    updateSearchSuggestions(_searchQuery.value)
+                } else {
+                    _searchSuggestions.value = emptyList()
+                }
+            }
+
+            is MovieListEvent.OnSearchSubmit -> {
+                _searchQuery.value = event.query
+                updateSearchSuggestions(event.query)
                 searchJob?.cancel()
                 searchJob = viewModelScope.launch {
                     delay(500) // Debounce search
@@ -59,6 +83,29 @@ class MovieListViewModel @Inject constructor(
                         loadMovies()
                     }
                 }
+            }
+        }
+    }
+
+    private fun updateSearchSuggestions(query: String) {
+        suggestionsJob?.cancel()
+        suggestionsJob = viewModelScope.launch {
+            delay(300) // Debounce suggestions
+            if (query.length >= 2) {
+                when (val result = getSearchSuggestionsUseCase(query)) {
+                    is Result.Success -> {
+                        _searchSuggestions.value = result.data
+                    }
+                    is Result.Error -> {
+                        // Don't show error for suggestions, just clear them
+                        _searchSuggestions.value = emptyList()
+                    }
+                    is Result.Loading -> {
+                        // Keep previous suggestions while loading
+                    }
+                }
+            } else {
+                _searchSuggestions.value = emptyList()
             }
         }
     }
